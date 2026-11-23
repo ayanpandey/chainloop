@@ -241,10 +241,13 @@ type hookPayload struct {
 	ToolInput          json.RawMessage `json:"tool_input"`
 	// ToolCalls is the pre-tool form of older Copilot CLI releases: one
 	// hook for a batch of calls.
-	ToolCalls []struct {
-		Name string          `json:"name"`
-		Args json.RawMessage `json:"args"`
-	} `json:"toolCalls"`
+	ToolCalls []toolCall `json:"toolCalls"`
+}
+
+// toolCall is one call of a batched pre-tool payload.
+type toolCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
 }
 
 // toolArgs are the arguments of the file and shell tools that Trace reads.
@@ -376,9 +379,12 @@ func patchPaths(patch, cwd string) []string {
 	return paths
 }
 
-// readToolCalls maps a batch of calls to one input. File tools win over a
-// shell tool, because their per-file snapshots are exact. Each later
-// post-tool hook carries one call.
+// readToolCalls maps a batch of calls to one input. File tools stay the
+// primary input, because their per-file snapshots are exact. The first shell
+// call of a batch that also holds a file tool goes to BatchedCalls, so the
+// pre-tool handler takes the worktree snapshot for it too. All shell calls
+// of a session share one snapshot key, so one snapshot covers the batch.
+// Each later post-tool hook carries one call.
 func (p *Provider) readToolCalls(input *trace.HookInput, raw hookPayload) {
 	var paths []string
 	for _, call := range raw.ToolCalls {
@@ -394,17 +400,29 @@ func (p *Provider) readToolCalls(input *trace.HookInput, raw hookPayload) {
 			}
 		}
 	}
+
+	shellIdx := slices.IndexFunc(raw.ToolCalls, func(c toolCall) bool { return p.IsCommandTool(c.Name) })
+
 	if input.ToolName != "" {
 		setPaths(input, paths)
+		if shellIdx >= 0 {
+			shell := raw.ToolCalls[shellIdx]
+			input.BatchedCalls = append(input.BatchedCalls, &trace.HookInput{
+				SessionID:      input.SessionID,
+				HookEventName:  input.HookEventName,
+				Cwd:            input.Cwd,
+				TranscriptPath: input.TranscriptPath,
+				ToolName:       shell.Name,
+				Command:        decodeToolArgs(shell.Args).Command,
+			})
+		}
 		return
 	}
 
-	for _, call := range raw.ToolCalls {
-		if p.IsCommandTool(call.Name) {
-			input.ToolName = call.Name
-			input.Command = decodeToolArgs(call.Args).Command
-			return
-		}
+	if shellIdx >= 0 {
+		shell := raw.ToolCalls[shellIdx]
+		input.ToolName = shell.Name
+		input.Command = decodeToolArgs(shell.Args).Command
 	}
 }
 

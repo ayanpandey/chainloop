@@ -28,6 +28,7 @@ import (
 
 	"github.com/chainloop-dev/chainloop/app/cli/internal/trace"
 	"github.com/chainloop-dev/chainloop/app/cli/internal/trace/claude"
+	"github.com/chainloop-dev/chainloop/app/cli/internal/trace/copilot"
 	"github.com/chainloop-dev/chainloop/app/cli/internal/trace/cursor"
 	"github.com/chainloop-dev/chainloop/app/cli/internal/trace/hooks"
 	"github.com/chainloop-dev/chainloop/app/cli/internal/trace/opencode"
@@ -803,6 +804,56 @@ func TestHandleAgentCommandTool_AttributesShellFileChanges(t *testing.T) {
 	// The pre-command signature is cleaned up afterwards.
 	_, err := store.LoadShellPreSignature(state.ShellCallKey{SessionID: "ses-cmd"})
 	assert.Error(t, err)
+}
+
+// TestHandleAgentPreToolUse_CopilotMixedBatch drives a Copilot preToolUse batch
+// that holds a file tool and a shell tool, and asserts both are snapshotted.
+func TestHandleAgentPreToolUse_CopilotMixedBatch(t *testing.T) {
+	dir, gitDir := initGitRepo(t)
+	store := state.NewGitStore(gitDir)
+	require.NoError(t, store.InitTraceDir())
+
+	p := copilot.New()
+
+	withStdin(t, fmt.Sprintf(`{"sessionId":"ses-mixed","cwd":%q,"toolCalls":[{"id":"t1","name":"edit","args":"{\"path\":\"init.txt\"}"},{"id":"t2","name":"bash","args":"{\"command\":\"gen\"}"}]}`, dir))
+	require.NoError(t, HandleAgentPreToolUse(p, zerolog.Nop()))
+
+	// File half: the edited file is snapshotted.
+	snap, err := store.LoadFileSnapshot(state.FileSnapshotKey{SessionID: "ses-mixed", FilePath: filepath.Join(dir, "init.txt")})
+	require.NoError(t, err)
+	assert.Equal(t, "init", string(snap))
+
+	// Shell half: the pre-command signature exists.
+	_, err = store.LoadShellPreSignature(state.ShellCallKey{SessionID: "ses-mixed"})
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "generated.txt"), []byte("a\nb\nc\n"), 0600))
+
+	withStdin(t, fmt.Sprintf(`{"sessionId":"ses-mixed","cwd":%q,"toolName":"bash","toolArgs":{"command":"gen"}}`, dir))
+	require.NoError(t, HandleAgentPostToolUse(p, zerolog.Nop()))
+
+	attr := store.LoadAILineAttribution("ses-mixed")
+	require.Contains(t, attr.Files, "generated.txt")
+	require.NotEmpty(t, attr.Files["generated.txt"])
+	assert.Equal(t, 1, attr.Files["generated.txt"][0].Start)
+	assert.Equal(t, 3, attr.Files["generated.txt"][0].End)
+
+	_, err = store.LoadShellPreSignature(state.ShellCallKey{SessionID: "ses-mixed"})
+	assert.Error(t, err)
+}
+
+// TestHandleAgentPreToolUse_CopilotMixedBatchUnresolvedFilePath checks the
+// shell call is still snapshotted when the file tool of the batch has no path.
+func TestHandleAgentPreToolUse_CopilotMixedBatchUnresolvedFilePath(t *testing.T) {
+	dir, gitDir := initGitRepo(t)
+	store := state.NewGitStore(gitDir)
+	require.NoError(t, store.InitTraceDir())
+
+	withStdin(t, fmt.Sprintf(`{"sessionId":"ses-mixed-nopath","cwd":%q,"toolCalls":[{"name":"edit","args":"{}"},{"name":"bash","args":"{\"command\":\"gen\"}"}]}`, dir))
+	require.NoError(t, HandleAgentPreToolUse(copilot.New(), zerolog.Nop()))
+
+	_, err := store.LoadShellPreSignature(state.ShellCallKey{SessionID: "ses-mixed-nopath"})
+	require.NoError(t, err)
 }
 
 // TestHandleAgentCursorShellCommand drives the pre/post-tool-use handlers with

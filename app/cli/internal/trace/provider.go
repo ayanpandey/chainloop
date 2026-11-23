@@ -338,6 +338,10 @@ type HookInput struct {
 	// FilePaths holds all paths of a file tool that edits several files.
 	// Handlers process each path with its own snapshot and checkout.
 	FilePaths []string `json:"-"`
+	// BatchedCalls holds additional calls from a batched pre-tool payload. The
+	// pre-tool handler snapshots each separately. Set by providers whose hook
+	// payload can mix file and shell calls.
+	BatchedCalls []*HookInput `json:"-"`
 	// Command is the command line of a shell command tool, set by provider's
 	// ReadHookInput. Empty when the provider does not report it.
 	Command string `json:"-"`

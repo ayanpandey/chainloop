@@ -218,6 +218,31 @@ func TestReadHookInput(t *testing.T) {
 			want:    trace.HookInput{SessionID: testHookSession, Cwd: cwd, ToolName: toolBash, Command: "go test"},
 		},
 		{
+			name:    "pre tool, batched file and shell calls",
+			payload: `{"sessionId":"s-1","cwd":"/work/repo","toolCalls":[{"id":"t1","name":"create","args":"{\"path\":\"/work/repo/a.md\",\"file_text\":\"x\"}"},{"id":"t2","name":"bash","args":"{\"command\":\"go test\"}"},{"id":"t3","name":"powershell","args":"{\"command\":\"ignored\"}"}]}`,
+			want: trace.HookInput{
+				SessionID: testHookSession, Cwd: cwd, ToolName: toolCreate, FilePath: "/work/repo/a.md",
+				BatchedCalls: []*trace.HookInput{{SessionID: testHookSession, Cwd: cwd, ToolName: toolBash, Command: "go test"}},
+			},
+		},
+		{
+			name:    "pre tool, batched shell before file call",
+			payload: `{"sessionId":"s-1","cwd":"/work/repo","toolCalls":[{"id":"t1","name":"bash","args":"{\"command\":\"gen\"}"},{"id":"t2","name":"edit","args":"{\"path\":\"b.md\"}"}]}`,
+			want: trace.HookInput{
+				SessionID: testHookSession, Cwd: cwd, ToolName: "edit", FilePath: "/work/repo/b.md",
+				BatchedCalls: []*trace.HookInput{{SessionID: testHookSession, Cwd: cwd, ToolName: toolBash, Command: "gen"}},
+			},
+		},
+		{
+			name:    "pre tool, batched multi-file patch and shell call",
+			payload: `{"sessionId":"s-1","cwd":"/work/repo","toolCalls":[{"id":"c1","name":"apply_patch","args":"*** Begin Patch\n*** Update File: src/a.go\n@@\n-a\n+b\n*** Update File: b.go\n@@\n-a\n+b\n*** End Patch\n"},{"id":"c2","name":"bash","args":"{\"command\":\"gofmt -w .\"}"}]}`,
+			want: trace.HookInput{
+				SessionID: testHookSession, Cwd: cwd, ToolName: toolApplyPatch,
+				FilePaths:    []string{"/work/repo/src/a.go", "/work/repo/b.go"},
+				BatchedCalls: []*trace.HookInput{{SessionID: testHookSession, Cwd: cwd, ToolName: toolBash, Command: "gofmt -w ."}},
+			},
+		},
+		{
 			name:    "post tool, apply_patch with the patch as a string",
 			payload: `{"sessionId":"s-1","cwd":"/work/repo","toolCallId":"c1","toolName":"apply_patch","toolArgs":"*** Begin Patch\n*** Add File: /work/repo/greeting.txt\n+hello\n*** End Patch\n"}`,
 			want:    trace.HookInput{SessionID: testHookSession, Cwd: cwd, ToolName: toolApplyPatch, FilePath: "/work/repo/greeting.txt"},

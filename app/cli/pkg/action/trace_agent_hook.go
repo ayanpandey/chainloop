@@ -388,8 +388,14 @@ func HandleAgentPreToolUse(provider trace.Provider, log zerolog.Logger) error {
 		return nil
 	}
 
-	for _, fileInput := range fileHookInputs(input) {
-		if err := handleAgentPreToolUse(provider, fileInput, log); err != nil {
+	inputs := fileHookInputs(input)
+	// A batched payload can also hold a shell call, which needs its own
+	// worktree snapshot besides the file snapshots.
+	for _, extra := range input.BatchedCalls {
+		inputs = append(inputs, fileHookInputs(extra)...)
+	}
+	for _, one := range inputs {
+		if err := handleAgentPreToolUse(provider, one, log); err != nil {
 			return err
 		}
 	}
@@ -1215,6 +1221,7 @@ func fileHookInputs(input *trace.HookInput) []*trace.HookInput {
 		one := *input
 		one.FilePath = path
 		one.FilePaths = nil
+		one.BatchedCalls = nil
 		inputs = append(inputs, &one)
 	}
 	return inputs
